@@ -1,0 +1,120 @@
+<svg fill="none" viewBox="0 0 1920 1080" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+  <foreignObject width="100%" height="100%">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="width: 100vw; height: 100vh; margin: 0; padding: 0; overflow: hidden;">
+      <style>
+        @font-face {
+          font-family: 'MinecraftSeven';
+          src: url('https://cdn.jsdelivr.net/gh/tklwc2052/gameimages@main/Minecraft%20Seven_2.ttf') format('truetype');
+        }
+        body { margin: 0; overflow: hidden; background: #0f0f1b; font-family: 'MinecraftSeven', monospace; }
+        canvas { display: block; width: 100%; height: 100%; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #ffffff; pointer-events: none; z-index: 10; }
+        #ui div { margin-bottom: 5px; font-size: 16px; letter-spacing: 1px; text-shadow: 2px 2px #000; }
+        #hp-display { color: #ff5555; font-size: 20px; }
+        #achievement-popup { position: absolute; top: -100px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.9); border: 2px solid #ffaa00; padding: 15px 25px; color: #fff; text-align: center; transition: top 0.5s; z-index: 1000; }
+        #achievement-popup.show { top: 20px; }
+        #hotbar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; background: rgba(0, 0, 0, 0.8); padding: 8px; border: 2px solid #555; z-index: 10; }
+        .slot { width: 55px; height: 55px; border: 1px solid #333; background: #1a1a1a; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; font-size: 10px; }
+        .slot.active { border-color: #fff; background: #333; }
+        #shop { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #121212; border: 2px solid #555; color: #e0e0e0; padding: 25px; display: none; z-index: 100; width: 450px; }
+        .upgrade-btn { background: #2a2a2a; color: #fff; border: 1px solid #444; cursor: pointer; padding: 6px 14px; font-family: 'MinecraftSeven'; }
+      </style>
+
+      <div id="ui">
+        <div id="status">CONNECTING...</div>
+        <div id="hp-display">HP: 100/100</div>
+        <div id="coords">X: 0 Y: 0</div>
+        <div id="torch-display" style="color: #ffaa00;">TORCHES: 10</div>
+      </div>
+
+      <div id="achievement-popup"><h4>ACHIEVEMENT UNLOCKED!</h4><p id="achievement-name"></p></div>
+      <div id="hotbar">
+        <div class="slot active" id="slot-1">⛏️<div>PICK</div></div>
+        <div class="slot" id="slot-2">⚔️<div>SWORD</div></div>
+      </div>
+
+      <div id="shop">
+        <h2>VILLAGE TRADER</h2>
+        <div id="eff-list"></div>
+        <div id="fort-list"></div>
+        <button class="upgrade-btn" style="width:100%; margin-top:20px;" onclick="toggleShop()">CLOSE</button>
+      </div>
+
+      <canvas id="gameCanvas"></canvas>
+
+      <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+      <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+
+      <script><![CDATA[
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const TILE_SIZE = 64; const GRAVITY = 1600; const JUMP_FORCE = -650; const MOVE_SPEED = 400;
+        const firebaseConfig = { databaseURL: "https://ilikespacedotcom-default-rtdb.firebaseio.com" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        
+        // SPRITES & STATE
+        const sprites = { 
+            idle: new Image(), walk: [new Image(), new Image()], 
+            top: new Image(), ore: new Image(), hidden: new Image() 
+        };
+        sprites.idle.src = 'https://raw.githubusercontent.com/tklwc2052/take2/refs/heads/main/idle.png';
+        sprites.top.src = 'https://raw.githubusercontent.com/tklwc2052/take2/refs/heads/main/top.png';
+        sprites.ore.src = 'https://raw.githubusercontent.com/tklwc2052/take2/refs/heads/main/gold.png';
+
+        const player = { 
+            x: 4800, y: 100, vx: 0, vy: 0, w: 40, h: 50, hp: 200, maxHp: 500, 
+            res: 0, torchCount: 10, selectedSlot: 1, upgrades: { efficiency: 0, fortune: 0 },
+            stats: { dirt: 0, gold: 0, diamond: 0, total: 0, maxDepth: 0 }, achieved: []
+        };
+
+        let gameMap = [];
+        let isMapLoaded = false;
+        const keys = {};
+
+        function initMap() {
+            for (let y = 0; y < 1000; y++) {
+                gameMap[y] = [];
+                for (let x = 0; x < 150; x++) {
+                    gameMap[y][x] = y < 12 ? 0 : (y === 12 ? 3 : 1);
+                }
+            }
+            db.ref('world_breaks').once('value', (snap) => {
+                const data = snap.val();
+                if (data) Object.values(data).forEach(b => { if(gameMap[b.y]) gameMap[b.y][b.x] = 0; });
+                isMapLoaded = true;
+            });
+        }
+
+        window.onkeydown = (e) => { keys[e.key.toLowerCase()] = true; };
+        window.onkeyup = (e) => { keys[e.key.toLowerCase()] = false; };
+
+        function update(dt) {
+            if (!isMapLoaded) return;
+            player.vy += GRAVITY * dt;
+            if (keys['a']) player.x -= MOVE_SPEED * dt;
+            if (keys['d']) player.x += MOVE_SPEED * dt;
+            if (keys[' '] && player.vy === 0) player.vy = JUMP_FORCE;
+            player.y += player.vy * dt;
+            if (player.y > 600) { player.y = 600; player.vy = 0; }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "white";
+            ctx.fillText("X: " + Math.floor(player.x) + " Y: " + Math.floor(player.y), 20, 100);
+            ctx.fillRect(player.x - (player.x - canvas.width/2), player.y - (player.y - canvas.height/2), player.w, player.h);
+            requestAnimationFrame(draw);
+        }
+
+        // Reduced logic for SVG performance - Use the link directly to run full logic
+        initMap();
+        let lastT = 0;
+        function loop(t) { update((t - lastT)/1000); lastT = t; draw(); requestAnimationFrame(loop); }
+        requestAnimationFrame(loop);
+      ]]></script>
+    </div>
+  </foreignObject>
+</svg>
